@@ -9,7 +9,7 @@ COSMETICS=json.loads(Path(__file__).with_name('cosmetics.json').read_text())
 DB=os.environ.get('BUDDYWORLD_DB','buddyworld.db'); BASE=os.environ.get('BUDDYWORLD_PUBLIC_BASE','').rstrip('/'); ID_RE=re.compile(r'^BDY-[0-9A-F]{8}$')
 app=Flask(__name__); app.secret_key=os.environ.get('BUDDYWORLD_SITE_SECRET','change-me'); app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=True,MAX_CONTENT_LENGTH=65536)
 CSS='''body{margin:0;background:#050914;color:#e9f7ff;font-family:ui-monospace,monospace}.top{display:flex;justify-content:space-between;gap:10px;padding:16px 22px;border-bottom:1px solid #17334d;background:#08111f}.brand{font-weight:900;color:#fff;text-decoration:none}.brand span{color:#49e7ff}.wrap{max-width:1050px;margin:auto;padding:22px}.panel{background:#0b1423;border:1px solid #17334d;border-radius:16px;padding:18px;margin-bottom:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.card{background:#0d1929;border:1px solid #1d3d58;border-radius:12px;padding:13px}.btn,button{background:#0a1626;color:#e9f7ff;border:1px solid #1c3b56;border-radius:9px;padding:10px 12px;text-decoration:none;cursor:pointer}.primary{background:#49e7ff!important;color:#031019!important;border-color:#49e7ff!important;font-weight:800}input,select{width:100%;box-sizing:border-box;background:#07111e;color:#fff;border:1px solid #224562;border-radius:9px;padding:10px;font:inherit;margin:6px 0 12px}.muted{color:#7e9bb0}.flash{padding:10px;border:1px solid #ffc857;background:#2a2108;border-radius:9px;margin-bottom:12px}.ok{color:#4df59b}.warn{color:#ffc857}.bad{color:#ff617d}.trade{border-left:4px solid #49e7ff}.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:700px){.split{grid-template-columns:1fr}.top{flex-direction:column}}'''
-HOME='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Buddy World</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><a class=btn href=/trades>TRADE BOARD</a></div><main class=wrap>{% for m in get_flashed_messages() %}<div class=flash>{{m}}</div>{% endfor %}<section class=panel><small>BUDDY WORLD V24.3</small><h1>Add Buddy by ID — no ESP Wi‑Fi needed</h1><p class=muted>Open the Buddy's ID screen and type the <b>BDY-XXXXXXXX</b> code here. Choose a site PIN so only you can edit its web trade page.</p><form method=post action=/add><label>Buddy ID</label><input name=buddy_id placeholder="BDY-12AB34CD" maxlength=12 required><label>Site PIN</label><input name=pin type=password minlength=4 maxlength=12 required><button class=primary>ADD / OPEN BUDDY</button></form></section><section class=grid><div class=card><small>REGISTERED</small><h2>{{stats.buddies}}</h2></div><div class=card><small>FOR TRADE</small><h2>{{stats.items}}</h2></div><div class=card><small>OPEN OFFERS</small><h2>{{stats.offers}}</h2></div></section></main></body></html>'''
+HOME='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Buddy World</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><a class=btn href=/trades>TRADE BOARD</a></div><main class=wrap>{% for m in get_flashed_messages() %}<div class=flash>{{m}}</div>{% endfor %}<section class=panel><small>BUDDY WORLD V24.3</small><h1>Add Buddy by ID — no ESP Wi‑Fi needed</h1><p class=muted>Open the Buddy's ID screen and type the <b>BDY-XXXXXXXX</b> code here. Choose a site PIN so only you can edit its web trade page.</p><form method=post action=/add><label>Buddy ID</label><input name=buddy_id placeholder="BDY-12AB34CD" maxlength=32 autocapitalize=characters autocomplete=off required><label>Site PIN</label><input name=pin type=password minlength=4 maxlength=12 required><button class=primary>ADD / OPEN BUDDY</button></form></section><section class=grid><div class=card><small>REGISTERED</small><h2>{{stats.buddies}}</h2></div><div class=card><small>FOR TRADE</small><h2>{{stats.items}}</h2></div><div class=card><small>OPEN OFFERS</small><h2>{{stats.offers}}</h2></div></section></main></body></html>'''
 PROFILE='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>{{bid}}</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><div><a class=btn href=/trades>TRADES</a>{% if mine %} <a class="btn primary" href="/manage/{{bid}}">MANAGE</a>{% endif %}</div></div><main class=wrap><section class=panel><small>BUDDY PASSPORT</small><h1>{{bid}}</h1><p>{{p.name}} · {{p.mood}} · SCORE {{p.score}}</p><p class=muted>{% if p.site_only %}Added by ID. Device sync is optional.{% else %}Last device sync: {{p.updated_at}}{% endif %}</p></section><section class=panel><h2>FOR TRADE</h2><div class=grid>{% for x in items %}<div class="card trade"><b>#{{x.effect_id}} {{x.name}}</b><br><small>{{x.rarity}}</small></div>{% else %}<div class=muted>No cosmetics listed.</div>{% endfor %}</div></section></main></body></html>'''
 MANAGE='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Manage {{bid}}</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><div><a class=btn href="/b/{{bid}}">PUBLIC</a> <a class=btn href=/logout>LOG OUT</a></div></div><main class=wrap>{% for m in get_flashed_messages() %}<div class=flash>{{m}}</div>{% endfor %}<section class=panel><h1>{{bid}}</h1><p class=muted>Website trade planning. Permanent item transfer still happens Buddy-to-Buddy so the physical inventory stays correct.</p></section><div class=split><section class=panel><h2>ADD TO TRADE LIST</h2><form method=post action="/manage/{{bid}}/trade-list/add"><label>Cosmetic</label><select name=effect_id>{% for x in catalog %}<option value="{{x.id}}">#{{x.id}} {{x.name}} · {{x.rarity}}</option>{% endfor %}</select><button class=primary>ADD</button></form></section><section class=panel><h2>YOUR TRADE LIST</h2>{% for x in items %}<div class="card trade"><b>COSMETIC #{{x.effect_id}}</b> · {{x.rarity}}<form method=post action="/manage/{{bid}}/trade-list/remove"><input type=hidden name=effect_id value="{{x.effect_id}}"><button>REMOVE</button></form></div>{% else %}<p class=muted>Nothing listed yet.</p>{% endfor %}</section></div><section class=panel><h2>SEND TRADE OFFER</h2><form method=post action="/manage/{{bid}}/offer"><label>Other Buddy ID</label><input name=to_buddy placeholder="BDY-XXXXXXXX" required><label>I offer</label><select name=offered multiple size=7>{% for x in items %}<option value="{{x.effect_id}}">COSMETIC #{{x.effect_id}} · {{x.rarity}}</option>{% endfor %}</select><label>I want</label><select name=wanted multiple size=7>{% for x in catalog %}<option value="{{x.id}}">COSMETIC #{{x.id}} · {{x.rarity}}</option>{% endfor %}</select><label>Message</label><input name=message maxlength=120 placeholder="Want to swap?"><button class=primary>SEND OFFER</button></form></section><section class=panel><h2>INCOMING</h2><div class=grid>{% for o in incoming %}<div class="card trade"><b>#{{o.id}} FROM {{o.from_buddy}}</b><p>Offers {{o.offered}}</p><p>Wants {{o.wanted}}</p><p class={{o.cls}}>{{o.status|upper}}</p>{% if o.status=='open' %}<form method=post action="/manage/{{bid}}/offer/{{o.id}}/accept"><button class=primary>ACCEPT</button></form><form method=post action="/manage/{{bid}}/offer/{{o.id}}/decline"><button>DECLINE</button></form>{% endif %}</div>{% else %}<p class=muted>No incoming offers.</p>{% endfor %}</div></section><section class=panel><h2>OUTGOING</h2><div class=grid>{% for o in outgoing %}<div class=card><b>#{{o.id}} TO {{o.to_buddy}}</b><p>Offers {{o.offered}}</p><p>Wants {{o.wanted}}</p><p class={{o.cls}}>{{o.status|upper}}</p>{% if o.status=='accepted' %}<b class=ok>READY TO SWAP PHYSICALLY</b>{% endif %}</div>{% else %}<p class=muted>No outgoing offers.</p>{% endfor %}</div></section></main></body></html>'''
 TRADES='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Trade Board</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><b>TRADE BOARD</b></div><main class=wrap><section class=panel><h1>Cosmetics for trade</h1><div class=grid>{% for b in board %}<a class="card trade" style="color:inherit;text-decoration:none" href="/b/{{b.id}}"><b>{{b.id}}</b><p>{{b.count}} cosmetic(s)</p><small>{{b.preview}}</small></a>{% else %}<p class=muted>No listings yet.</p>{% endfor %}</div></section></main></body></html>'''
@@ -17,10 +17,18 @@ TRADES='''<!doctype html><html><head><meta name=viewport content="width=device-w
 def now():return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def con():
  c=sqlite3.connect(DB);c.row_factory=sqlite3.Row;c.executescript('''CREATE TABLE IF NOT EXISTS buddies(buddy_id TEXT PRIMARY KEY,key_hash TEXT NOT NULL,profile_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT,buddy_id TEXT,event_type TEXT,message TEXT,created_at TEXT);CREATE TABLE IF NOT EXISTS buddy_owners(buddy_id TEXT PRIMARY KEY,pin_hash TEXT NOT NULL,claimed_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS trade_items(buddy_id TEXT NOT NULL,effect_id INTEGER NOT NULL,added_at TEXT NOT NULL,PRIMARY KEY(buddy_id,effect_id));CREATE TABLE IF NOT EXISTS trade_offers(id INTEGER PRIMARY KEY AUTOINCREMENT,from_buddy TEXT NOT NULL,to_buddy TEXT NOT NULL,offered_json TEXT NOT NULL,wanted_json TEXT NOT NULL,message TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);''');return c
+def parse_buddy_id(x):
+ raw=(x or '').strip().upper()
+ compact=re.sub(r'[^0-9A-Z]','',raw)
+ if compact.startswith('BDY'):compact=compact[3:]
+ if re.fullmatch(r'[0-9A-F]{8}',compact):
+  return 'BDY-'+compact
+ return None
+
 def norm(x):
- x=(x or '').strip().upper()
- if not ID_RE.fullmatch(x):abort(400)
- return x
+ b=parse_buddy_id(x)
+ if not b:abort(400)
+ return b
 def nint(x,d=0,lo=0,hi=331):
  try:x=int(x)
  except:return d
@@ -56,12 +64,20 @@ def off(r):
  d=dict(r);d['offered']=fmtids(d['offered_json']);d['wanted']=fmtids(d['wanted_json']);d['cls']='ok' if d['status']=='accepted' else ('bad' if d['status']=='declined' else 'warn');return d
 def base():return BASE or request.host_url.rstrip('/')
 
+@app.errorhandler(400)
+def bad_request(e):
+ flash('Invalid Buddy ID or form value. Check the code shown on the Buddy and try again.')
+ return redirect(url_for('home'))
+
 @app.get('/')
 def home():
  c=con();s={'buddies':c.execute('select count(*) from buddies').fetchone()[0],'items':c.execute('select count(*) from trade_items').fetchone()[0],'offers':c.execute("select count(*) from trade_offers where status='open'").fetchone()[0]};c.close();return render_template_string(HOME,css=CSS,stats=s)
 @app.post('/add')
 def add():
- b=norm(request.form.get('buddy_id'));pin=(request.form.get('pin') or '').strip()
+ b=parse_buddy_id(request.form.get('buddy_id'));pin=(request.form.get('pin') or '').strip()
+ if not b:
+  flash('Invalid Buddy ID. Use the 8 hexadecimal characters shown on the Buddy, e.g. BDY-12AB34CD.')
+  return redirect(url_for('home'))
  if not 4<=len(pin)<=12:flash('PIN must be 4–12 characters.');return redirect(url_for('home'))
  c=con();ensure(c,b);o=c.execute('select pin_hash from buddy_owners where buddy_id=?',(b,)).fetchone()
  if o and not check_password_hash(o['pin_hash'],pin):c.close();flash('Wrong site PIN.');return redirect(url_for('home'))
@@ -91,7 +107,10 @@ def trade_remove(bid):
 @app.post('/manage/<bid>/offer')
 @auth
 def offer(bid):
- to=norm(request.form.get('to_buddy'))
+ to=parse_buddy_id(request.form.get('to_buddy'))
+ if not to:
+  flash('Invalid other Buddy ID. Use BDY-XXXXXXXX.')
+  return redirect(url_for('manage',bid=bid))
  if to==bid:flash('Choose another Buddy.');return redirect(url_for('manage',bid=bid))
  offered=sorted({nint(x,-1,-1,331) for x in request.form.getlist('offered') if nint(x,-1,-1,331)>0});wanted=sorted({nint(x,-1,-1,331) for x in request.form.getlist('wanted') if nint(x,-1,-1,331)>0})
  c=con();ensure(c,to);allowed={r[0] for r in c.execute('select effect_id from trade_items where buddy_id=?',(bid,))};offered=[x for x in offered if x in allowed]
