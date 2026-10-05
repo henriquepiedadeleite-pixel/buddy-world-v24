@@ -1,87 +1,143 @@
 import hashlib,json,os,re,sqlite3
 from datetime import datetime,timezone
-from flask import Flask,request,jsonify,abort,Response,render_template_string
+from functools import wraps
+from flask import Flask,request,jsonify,abort,Response,render_template_string,redirect,url_for,session,flash
+from werkzeug.security import generate_password_hash,check_password_hash
 import qrcode
+DB=os.environ.get('BUDDYWORLD_DB','buddyworld.db'); BASE=os.environ.get('BUDDYWORLD_PUBLIC_BASE','').rstrip('/'); ID_RE=re.compile(r'^BDY-[0-9A-F]{8}$')
+app=Flask(__name__); app.secret_key=os.environ.get('BUDDYWORLD_SITE_SECRET','change-me'); app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=True,MAX_CONTENT_LENGTH=65536)
+CSS='''body{margin:0;background:#050914;color:#e9f7ff;font-family:ui-monospace,monospace}.top{display:flex;justify-content:space-between;gap:10px;padding:16px 22px;border-bottom:1px solid #17334d;background:#08111f}.brand{font-weight:900;color:#fff;text-decoration:none}.brand span{color:#49e7ff}.wrap{max-width:1050px;margin:auto;padding:22px}.panel{background:#0b1423;border:1px solid #17334d;border-radius:16px;padding:18px;margin-bottom:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.card{background:#0d1929;border:1px solid #1d3d58;border-radius:12px;padding:13px}.btn,button{background:#0a1626;color:#e9f7ff;border:1px solid #1c3b56;border-radius:9px;padding:10px 12px;text-decoration:none;cursor:pointer}.primary{background:#49e7ff!important;color:#031019!important;border-color:#49e7ff!important;font-weight:800}input,select{width:100%;box-sizing:border-box;background:#07111e;color:#fff;border:1px solid #224562;border-radius:9px;padding:10px;font:inherit;margin:6px 0 12px}.muted{color:#7e9bb0}.flash{padding:10px;border:1px solid #ffc857;background:#2a2108;border-radius:9px;margin-bottom:12px}.ok{color:#4df59b}.warn{color:#ffc857}.bad{color:#ff617d}.trade{border-left:4px solid #49e7ff}.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:700px){.split{grid-template-columns:1fr}.top{flex-direction:column}}'''
+HOME='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Buddy World</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><a class=btn href=/trades>TRADE BOARD</a></div><main class=wrap>{% for m in get_flashed_messages() %}<div class=flash>{{m}}</div>{% endfor %}<section class=panel><small>BUDDY WORLD V24.3</small><h1>Add Buddy by ID — no ESP Wi‑Fi needed</h1><p class=muted>Open the Buddy's ID screen and type the <b>BDY-XXXXXXXX</b> code here. Choose a site PIN so only you can edit its web trade page.</p><form method=post action=/add><label>Buddy ID</label><input name=buddy_id placeholder="BDY-12AB34CD" maxlength=12 required><label>Site PIN</label><input name=pin type=password minlength=4 maxlength=12 required><button class=primary>ADD / OPEN BUDDY</button></form></section><section class=grid><div class=card><small>REGISTERED</small><h2>{{stats.buddies}}</h2></div><div class=card><small>FOR TRADE</small><h2>{{stats.items}}</h2></div><div class=card><small>OPEN OFFERS</small><h2>{{stats.offers}}</h2></div></section></main></body></html>'''
+PROFILE='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>{{bid}}</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><div><a class=btn href=/trades>TRADES</a>{% if mine %} <a class="btn primary" href="/manage/{{bid}}">MANAGE</a>{% endif %}</div></div><main class=wrap><section class=panel><small>BUDDY PASSPORT</small><h1>{{bid}}</h1><p>{{p.name}} · {{p.mood}} · SCORE {{p.score}}</p><p class=muted>{% if p.site_only %}Added by ID. Device sync is optional.{% else %}Last device sync: {{p.updated_at}}{% endif %}</p></section><section class=panel><h2>FOR TRADE</h2><div class=grid>{% for x in items %}<div class="card trade"><b>COSMETIC #{{x.effect_id}}</b><br><small>{{x.rarity}}</small></div>{% else %}<div class=muted>No cosmetics listed.</div>{% endfor %}</div></section></main></body></html>'''
+MANAGE='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Manage {{bid}}</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><div><a class=btn href="/b/{{bid}}">PUBLIC</a> <a class=btn href=/logout>LOG OUT</a></div></div><main class=wrap>{% for m in get_flashed_messages() %}<div class=flash>{{m}}</div>{% endfor %}<section class=panel><h1>{{bid}}</h1><p class=muted>Website trade planning. Permanent item transfer still happens Buddy-to-Buddy so the physical inventory stays correct.</p></section><div class=split><section class=panel><h2>ADD TO TRADE LIST</h2><form method=post action="/manage/{{bid}}/trade-list/add"><label>Cosmetic</label><select name=effect_id>{% for x in catalog %}<option value="{{x.id}}">#{{x.id}} · {{x.rarity}}</option>{% endfor %}</select><button class=primary>ADD</button></form></section><section class=panel><h2>YOUR TRADE LIST</h2>{% for x in items %}<div class="card trade"><b>COSMETIC #{{x.effect_id}}</b> · {{x.rarity}}<form method=post action="/manage/{{bid}}/trade-list/remove"><input type=hidden name=effect_id value="{{x.effect_id}}"><button>REMOVE</button></form></div>{% else %}<p class=muted>Nothing listed yet.</p>{% endfor %}</section></div><section class=panel><h2>SEND TRADE OFFER</h2><form method=post action="/manage/{{bid}}/offer"><label>Other Buddy ID</label><input name=to_buddy placeholder="BDY-XXXXXXXX" required><label>I offer</label><select name=offered multiple size=7>{% for x in items %}<option value="{{x.effect_id}}">COSMETIC #{{x.effect_id}} · {{x.rarity}}</option>{% endfor %}</select><label>I want</label><select name=wanted multiple size=7>{% for x in catalog %}<option value="{{x.id}}">COSMETIC #{{x.id}} · {{x.rarity}}</option>{% endfor %}</select><label>Message</label><input name=message maxlength=120 placeholder="Want to swap?"><button class=primary>SEND OFFER</button></form></section><section class=panel><h2>INCOMING</h2><div class=grid>{% for o in incoming %}<div class="card trade"><b>#{{o.id}} FROM {{o.from_buddy}}</b><p>Offers {{o.offered}}</p><p>Wants {{o.wanted}}</p><p class={{o.cls}}>{{o.status|upper}}</p>{% if o.status=='open' %}<form method=post action="/manage/{{bid}}/offer/{{o.id}}/accept"><button class=primary>ACCEPT</button></form><form method=post action="/manage/{{bid}}/offer/{{o.id}}/decline"><button>DECLINE</button></form>{% endif %}</div>{% else %}<p class=muted>No incoming offers.</p>{% endfor %}</div></section><section class=panel><h2>OUTGOING</h2><div class=grid>{% for o in outgoing %}<div class=card><b>#{{o.id}} TO {{o.to_buddy}}</b><p>Offers {{o.offered}}</p><p>Wants {{o.wanted}}</p><p class={{o.cls}}>{{o.status|upper}}</p>{% if o.status=='accepted' %}<b class=ok>READY TO SWAP PHYSICALLY</b>{% endif %}</div>{% else %}<p class=muted>No outgoing offers.</p>{% endfor %}</div></section></main></body></html>'''
+TRADES='''<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>Trade Board</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/>BUDDY<span>WORLD</span></a><b>TRADE BOARD</b></div><main class=wrap><section class=panel><h1>Cosmetics for trade</h1><div class=grid>{% for b in board %}<a class="card trade" style="color:inherit;text-decoration:none" href="/b/{{b.id}}"><b>{{b.id}}</b><p>{{b.count}} cosmetic(s)</p><small>{{b.preview}}</small></a>{% else %}<p class=muted>No listings yet.</p>{% endfor %}</div></section></main></body></html>'''
 
-DB=os.environ.get("BUDDYWORLD_DB","buddyworld.db")
-BASE=os.environ.get("BUDDYWORLD_PUBLIC_BASE","").rstrip("/")
-ID_RE=re.compile(r"^BDY-[0-9A-F]{8}$")
-app=Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"]=65536
-
-CSS="""body{margin:0;background:#050914;color:#e9f7ff;font-family:ui-monospace,monospace}.top{display:flex;justify-content:space-between;padding:18px 24px;border-bottom:1px solid #16324a;background:#08111f}.brand{font-weight:900;letter-spacing:.12em}.brand span{color:#49e7ff}.chip{color:#ffc857}.wrap{max-width:1100px;margin:auto;padding:24px}.hero,.panel{background:#0b1423;border:1px solid #17334d;border-radius:18px;padding:22px;margin-bottom:16px;box-shadow:0 0 30px #00d9ff0a}.hero{display:grid;grid-template-columns:1fr 220px;gap:24px;align-items:center}.orb{width:170px;height:170px;border-radius:42%;background:linear-gradient(145deg,#49e7ff,#17485f);border:4px solid white;position:relative;box-shadow:0 0 45px #49e7ff44;margin:auto}.eye{position:absolute;top:58px;width:18px;height:24px;background:#031019;border-radius:50%}.e1{left:42px}.e2{right:42px}.mouth{position:absolute;width:42px;height:18px;border-bottom:5px solid #031019;border-radius:50%;left:60px;top:94px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.stat{background:#0b1423;border:1px solid #17334d;border-radius:14px;padding:16px}.stat small{color:#7e9bb0;display:block}.stat b{font-size:25px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.card{display:block;text-decoration:none;color:inherit;background:#0d1929;border:1px solid #1d3d58;border-radius:12px;padding:14px}.mut{color:#ffc857}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.tabs button{background:#0a1626;color:#9bb3c5;border:1px solid #1c3b56;border-radius:10px;padding:9px 12px}.tabs button.on{background:#49e7ff;color:#031019}.tab{display:none}.tab.on{display:block}.rows>div{padding:10px;border-bottom:1px solid #162b40}.mutbadge{display:inline-block;padding:2px 6px;border:1px solid #ffc857;color:#ffc857;border-radius:6px;margin-left:6px}@media(max-width:700px){.hero{grid-template-columns:1fr}.orb{display:none}}"""
-
-HOME="""<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>Buddy World</title><style>{{css}}</style></head><body><div class=top><div class=brand>BUDDY<span>WORLD</span></div><div class=chip>V24 NETWORK</div></div><main class=wrap><section class=hero><div><small>PHYSICAL BUDDIES · DIGITAL PASSPORTS</small><h1>Every Buddy has a story.</h1><p>Permanent profiles for collections, pets, friends, personalities and stats.</p></div><div class=orb><i class='eye e1'></i><i class='eye e2'></i><b class=mouth></b></div></section><section class=grid><div class=stat><small>REGISTERED</small><b id=a>—</b></div><div class=stat><small>MUTATIONS</small><b id=b>—</b></div><div class=stat><small>BOSSES WON</small><b id=c>—</b></div></section><section class=panel><h2>RECENT BUDDIES</h2><div id=recent class=cards></div></section></main><script>fetch('/api/v1/world').then(r=>r.json()).then(d=>{a.textContent=d.total_buddies;b.textContent=d.mutations;c.textContent=d.bosses;recent.innerHTML=d.recent.length?d.recent.map(x=>`<a class=card href="/b/${x.id}"><b>${x.id}</b><div>${x.personality.temperament||''} · ${x.personality.energy||''} · ${x.personality.quirk||''}</div><small>${x.score||0} SCORE · ${x.mood||'CALM'}</small></a>`).join(''):'No Buddies synced yet.'}).catch(()=>recent.textContent='API offline')</script></body></html>"""
-
-PROFILE="""<!doctype html><html><head><meta name=viewport content='width=device-width,initial-scale=1'><title>{{bid}} · Buddy World</title><style>{{css}}</style></head><body><div class=top><a class=brand href=/ style='color:inherit;text-decoration:none'>BUDDY<span>WORLD</span></a><div class=chip id=status>LOADING</div></div><main class=wrap><section class=hero><div><small>BUDDY PASSPORT</small><h1 id=name>DESK BUDDY</h1><h3>{{bid}}</h3><div id=traits></div></div><div class=orb id=orb><i class='eye e1'></i><i class='eye e2'></i><b class=mouth></b></div></section><section class=grid><div class=stat><small>SCORE</small><b id=score>0</b></div><div class=stat><small>MOOD</small><b id=mood>—</b></div><div class=stat><small>FRIENDS</small><b id=friendsn>0</b></div><div class=stat><small>CRATES</small><b id=crates>0</b></div></section><div class=tabs><button class=on data-t=p>PROFILE</button><button data-t=f>FRIENDS</button><button data-t=s>STATS</button><button data-t=a>ACTIVITY</button></div><section id=p class='tab on panel rows'></section><section id=f class='tab panel cards'></section><section id=s class='tab panel rows'></section><section id=a class='tab panel rows'></section></main><script>const bid={{bid|tojson}};document.querySelectorAll('button[data-t]').forEach(x=>x.onclick=()=>{document.querySelectorAll('.tab,button[data-t]').forEach(y=>y.classList.remove('on'));x.classList.add('on');document.getElementById(x.dataset.t).classList.add('on')});fetch('/api/v1/buddy/'+bid).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{status.textContent='ONLINE';name.textContent=d.name;score.textContent=d.score;mood.textContent=d.mood;friendsn.textContent=d.friends.length;crates.textContent=d.pending_crates;let q=d.personality||{};traits.innerHTML=`<span class=mutbadge>${q.temperament||''}</span> <span class=mutbadge>${q.energy||''}</span> <span class=mutbadge>${q.quirk||''}</span>`;let e=d.equipped||{};p.innerHTML=`<div><b>PERSONALITY</b> #${q.id||0} / 575</div><div><b>COSMETIC</b> #${e.effect_id||0} ${e.effect_mutation?'<span class=mutbadge>MUT '+e.effect_mutation+'</span>':''}</div><div><b>PET</b> #${e.pet_id||0} · EVO ${e.pet_evolution||0} ${e.pet_mutation?'<span class=mutbadge>MUT '+e.pet_mutation+'</span>':''}</div>`;f.innerHTML=d.friends.length?d.friends.map(x=>`<a class=card href="/b/${x.id}"><b>${x.id}</b><small>MET ${x.meets} TIMES</small></a>`).join(''):'No friends yet.';let st=d.stats||{};s.innerHTML=Object.entries(st).map(([k,v])=>`<div><b>${k.replaceAll('_',' ').toUpperCase()}</b> · ${v}</div>`).join('');a.innerHTML=(d.activity||[]).map(x=>`<div><b>${x.event_type.toUpperCase()}</b> · ${x.message}<br><small>${x.created_at}</small></div>`).join('')||'No activity yet.'}).catch(()=>{status.textContent='NOT SYNCED';p.innerHTML='This Buddy has not synced yet.'})</script></body></html>"""
-
-def now(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def now():return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def con():
-    c=sqlite3.connect(DB);c.row_factory=sqlite3.Row
-    c.executescript("CREATE TABLE IF NOT EXISTS buddies(buddy_id TEXT PRIMARY KEY,key_hash TEXT NOT NULL,profile_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT,buddy_id TEXT,event_type TEXT,message TEXT,created_at TEXT);")
-    return c
+ c=sqlite3.connect(DB);c.row_factory=sqlite3.Row;c.executescript('''CREATE TABLE IF NOT EXISTS buddies(buddy_id TEXT PRIMARY KEY,key_hash TEXT NOT NULL,profile_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT,buddy_id TEXT,event_type TEXT,message TEXT,created_at TEXT);CREATE TABLE IF NOT EXISTS buddy_owners(buddy_id TEXT PRIMARY KEY,pin_hash TEXT NOT NULL,claimed_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS trade_items(buddy_id TEXT NOT NULL,effect_id INTEGER NOT NULL,added_at TEXT NOT NULL,PRIMARY KEY(buddy_id,effect_id));CREATE TABLE IF NOT EXISTS trade_offers(id INTEGER PRIMARY KEY AUTOINCREMENT,from_buddy TEXT NOT NULL,to_buddy TEXT NOT NULL,offered_json TEXT NOT NULL,wanted_json TEXT NOT NULL,message TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);''');return c
 def norm(x):
-    x=(x or "").strip().upper()
-    if not ID_RE.fullmatch(x): abort(400)
-    return x
-def iv(x,d=0,lo=0,hi=2**31-1):
-    try:x=int(x)
-    except:return d
-    return max(lo,min(hi,x))
-def clean(b,r):
-    p=r.get("personality") if isinstance(r.get("personality"),dict) else {}
-    e=r.get("equipped") if isinstance(r.get("equipped"),dict) else {}
-    st=r.get("stats") if isinstance(r.get("stats"),dict) else {}
-    fs=[]
-    for x in (r.get("friends") or [])[:24]:
-        if isinstance(x,dict) and ID_RE.fullmatch(str(x.get("id","")).upper()):
-            fs.append({"id":str(x["id"]).upper(),"meets":iv(x.get("meets"),1,1,65535)})
-    return {"id":b,"name":str(r.get("name","DESK BUDDY"))[:32],"firmware":str(r.get("firmware","V24"))[:16],"score":iv(r.get("score"),0,0,2**32-1),"pending_crates":iv(r.get("pending_crates"),0,0,65535),"mood":str(r.get("mood","CALM"))[:20],"personality":{"id":iv(p.get("id"),0,0,575),"temperament":str(p.get("temperament","CHILL"))[:20],"energy":str(p.get("energy","ZEN"))[:20],"quirk":str(p.get("quirk","GAMER"))[:20]},"equipped":{"effect_id":iv(e.get("effect_id"),0,0,511),"effect_mutation":iv(e.get("effect_mutation"),0,0,10),"pet_id":iv(e.get("pet_id"),0,0,105),"pet_mutation":iv(e.get("pet_mutation"),0,0,10),"pet_evolution":iv(e.get("pet_evolution"),0,0,2)},"friends":fs,"stats":{k:iv(st.get(k),0,0,2**32-1) for k in ["boss_wins","rps_wins","crates_opened","tv_episodes","social_actions"]},"collection":r.get("collection") if isinstance(r.get("collection"),dict) else {}}
-def base():
-    return BASE or request.host_url.rstrip("/")
+ x=(x or '').strip().upper()
+ if not ID_RE.fullmatch(x):abort(400)
+ return x
+def nint(x,d=0,lo=0,hi=331):
+ try:x=int(x)
+ except:return d
+ return max(lo,min(hi,x))
+def rarity(i):
+ if 132<=i<=171 or 232<=i<=271:return 'RARE'
+ if 172<=i<=201 or 272<=i<=301:return 'EPIC'
+ if 202<=i<=221 or 302<=i<=321:return 'MYTHIC'
+ if 222<=i<=231 or 322<=i<=331:return 'LEGEND'
+ if i<48:return 'RARE'
+ if i<89:return 'EPIC'
+ if i<124:return 'MYTHIC'
+ return 'LEGEND'
+def catalog():return [{'id':i,'rarity':rarity(i)} for i in range(1,332)]
+def placeholder(b):return {'id':b,'name':'DESK BUDDY','firmware':'V24.3','site_only':True,'score':0,'mood':'OFFLINE','personality':{},'equipped':{},'friends':[],'stats':{},'collection':{}}
+def ensure(c,b):
+ if not c.execute('select 1 from buddies where buddy_id=?',(b,)).fetchone():
+  t=now();c.execute('insert into buddies values(?,?,?,?,?)',(b,'SITE:UNSYNCED',json.dumps(placeholder(b)),t,t));c.commit()
+def mine(b):return b in session.get('owned',[])
+def auth(fn):
+ @wraps(fn)
+ def w(bid,*a,**k):
+  b=norm(bid)
+  if not mine(b):flash('Open this Buddy with its site PIN first.');return redirect(url_for('home'))
+  return fn(b,*a,**k)
+ return w
+def items(c,b):return [{'effect_id':r['effect_id'],'rarity':rarity(r['effect_id'])} for r in c.execute('select effect_id from trade_items where buddy_id=? order by effect_id',(b,))]
+def fmtids(s):
+ try:a=json.loads(s)
+ except:a=[]
+ return ', '.join('#'+str(x) for x in a) or '—'
+def off(r):
+ d=dict(r);d['offered']=fmtids(d['offered_json']);d['wanted']=fmtids(d['wanted_json']);d['cls']='ok' if d['status']=='accepted' else ('bad' if d['status']=='declined' else 'warn');return d
+def base():return BASE or request.host_url.rstrip('/')
 
-@app.get("/")
-def home(): return render_template_string(HOME,css=CSS)
-@app.get("/b/<bid>")
-def page(bid): return render_template_string(PROFILE,css=CSS,bid=norm(bid))
-@app.get("/healthz")
-def health(): return jsonify(ok=True)
-@app.get("/api/v1/world")
+@app.get('/')
+def home():
+ c=con();s={'buddies':c.execute('select count(*) from buddies').fetchone()[0],'items':c.execute('select count(*) from trade_items').fetchone()[0],'offers':c.execute("select count(*) from trade_offers where status='open'").fetchone()[0]};c.close();return render_template_string(HOME,css=CSS,stats=s)
+@app.post('/add')
+def add():
+ b=norm(request.form.get('buddy_id'));pin=(request.form.get('pin') or '').strip()
+ if not 4<=len(pin)<=12:flash('PIN must be 4–12 characters.');return redirect(url_for('home'))
+ c=con();ensure(c,b);o=c.execute('select pin_hash from buddy_owners where buddy_id=?',(b,)).fetchone()
+ if o and not check_password_hash(o['pin_hash'],pin):c.close();flash('Wrong site PIN.');return redirect(url_for('home'))
+ if not o:c.execute('insert into buddy_owners values(?,?,?)',(b,generate_password_hash(pin),now()));c.commit()
+ c.close();a=session.get('owned',[]);a=[x for x in a if x!=b]+[b];session['owned']=a[-8:];return redirect(url_for('manage',bid=b))
+@app.get('/logout')
+def logout():session.clear();return redirect(url_for('home'))
+@app.get('/b/<bid>')
+def profile(bid):
+ b=norm(bid);c=con();r=c.execute('select * from buddies where buddy_id=?',(b,)).fetchone()
+ if not r:c.close();abort(404)
+ p=json.loads(r['profile_json']);p['updated_at']=r['updated_at'];it=items(c,b);c.close();return render_template_string(PROFILE,css=CSS,bid=b,p=p,items=it,mine=mine(b))
+@app.get('/manage/<bid>')
+@auth
+def manage(bid):
+ c=con();it=items(c,bid);inc=[off(x) for x in c.execute('select * from trade_offers where to_buddy=? order by id desc limit 40',(bid,))];out=[off(x) for x in c.execute('select * from trade_offers where from_buddy=? order by id desc limit 40',(bid,))];c.close();return render_template_string(MANAGE,css=CSS,bid=bid,items=it,catalog=catalog(),incoming=inc,outgoing=out)
+@app.post('/manage/<bid>/trade-list/add')
+@auth
+def trade_add(bid):
+ i=nint(request.form.get('effect_id'),-1,-1,331);c=con()
+ if i>0:c.execute('insert or ignore into trade_items values(?,?,?)',(bid,i,now()));c.commit()
+ c.close();return redirect(url_for('manage',bid=bid))
+@app.post('/manage/<bid>/trade-list/remove')
+@auth
+def trade_remove(bid):
+ i=nint(request.form.get('effect_id'),-1,-1,331);c=con();c.execute('delete from trade_items where buddy_id=? and effect_id=?',(bid,i));c.commit();c.close();return redirect(url_for('manage',bid=bid))
+@app.post('/manage/<bid>/offer')
+@auth
+def offer(bid):
+ to=norm(request.form.get('to_buddy'))
+ if to==bid:flash('Choose another Buddy.');return redirect(url_for('manage',bid=bid))
+ offered=sorted({nint(x,-1,-1,331) for x in request.form.getlist('offered') if nint(x,-1,-1,331)>0});wanted=sorted({nint(x,-1,-1,331) for x in request.form.getlist('wanted') if nint(x,-1,-1,331)>0})
+ c=con();ensure(c,to);allowed={r[0] for r in c.execute('select effect_id from trade_items where buddy_id=?',(bid,))};offered=[x for x in offered if x in allowed]
+ if not offered:c.close();flash('Select something from your trade list.');return redirect(url_for('manage',bid=bid))
+ t=now();c.execute('insert into trade_offers(from_buddy,to_buddy,offered_json,wanted_json,message,status,created_at,updated_at) values(?,?,?,?,?,?,?,?)',(bid,to,json.dumps(offered),json.dumps(wanted),(request.form.get('message') or '')[:120],'open',t,t));c.commit();c.close();flash('Offer sent.');return redirect(url_for('manage',bid=bid))
+@app.post('/manage/<bid>/offer/<int:oid>/<action>')
+@auth
+def offer_action(bid,oid,action):
+ if action not in ('accept','decline'):abort(400)
+ c=con();r=c.execute('select 1 from trade_offers where id=? and to_buddy=?',(oid,bid)).fetchone()
+ if not r:c.close();abort(404)
+ st='accepted' if action=='accept' else 'declined';c.execute('update trade_offers set status=?,updated_at=? where id=?',(st,now(),oid));c.commit();c.close();flash('Accepted — complete the real swap Buddy-to-Buddy.' if st=='accepted' else 'Declined.');return redirect(url_for('manage',bid=bid))
+@app.get('/trades')
+def trades():
+ c=con();board=[]
+ for r in c.execute('select buddy_id,count(*) n from trade_items group by buddy_id order by n desc'):
+  xs=[x['effect_id'] for x in items(c,r['buddy_id'])];board.append({'id':r['buddy_id'],'count':r['n'],'preview':', '.join('#'+str(x) for x in xs[:8])})
+ c.close();return render_template_string(TRADES,css=CSS,board=board)
+@app.get('/healthz')
+def health():return jsonify(ok=True,version='24.3')
+@app.get('/api/v1/world')
 def world():
-    c=con();rows=c.execute("select * from buddies order by updated_at desc limit 12").fetchall();allr=c.execute("select profile_json from buddies").fetchall()
-    recent=[];mut=0;boss=0
-    for r in rows:
-        p=json.loads(r["profile_json"]);recent.append({"id":r["buddy_id"],"score":p.get("score",0),"mood":p.get("mood","CALM"),"personality":p.get("personality",{})})
-    for r in allr:
-        p=json.loads(r[0]);col=p.get("collection",{});mut+=len(col.get("effect_mutations",[]))+len(col.get("pet_mutations",[]));boss+=p.get("stats",{}).get("boss_wins",0)
-    return jsonify(total_buddies=len(allr),mutations=mut,bosses=boss,recent=recent)
-@app.get("/api/v1/buddy/<bid>")
+ c=con();d={'total_buddies':c.execute('select count(*) from buddies').fetchone()[0],'trade_items':c.execute('select count(*) from trade_items').fetchone()[0],'open_offers':c.execute("select count(*) from trade_offers where status='open'").fetchone()[0]};c.close();return jsonify(d)
+@app.get('/api/v1/buddy/<bid>')
 def api_buddy(bid):
-    bid=norm(bid);c=con();r=c.execute("select * from buddies where buddy_id=?",(bid,)).fetchone()
-    if not r: abort(404)
-    p=json.loads(r["profile_json"]);p["created_at"]=r["created_at"];p["updated_at"]=r["updated_at"];p["activity"]=[dict(x) for x in c.execute("select event_type,message,created_at from activity where buddy_id=? order by id desc limit 24",(bid,))]
-    return jsonify(p)
-@app.post("/api/v1/buddy/<bid>/sync")
+ b=norm(bid);c=con();r=c.execute('select * from buddies where buddy_id=?',(b,)).fetchone()
+ if not r:c.close();abort(404)
+ p=json.loads(r['profile_json']);p['created_at']=r['created_at'];p['updated_at']=r['updated_at'];p['trade_list']=items(c,b);c.close();return jsonify(p)
+@app.post('/api/v1/buddy/<bid>/sync')
 def sync(bid):
-    bid=norm(bid);key=request.headers.get("X-Buddy-Key","")
-    if not 24<=len(key)<=96: abort(401)
-    raw=request.get_json(silent=True)
-    if not isinstance(raw,dict): abort(400)
-    p=clean(bid,raw);enc=json.dumps(p,separators=(",",":"));kh=hashlib.sha256(key.encode()).hexdigest();t=now();c=con();r=c.execute("select * from buddies where buddy_id=?",(bid,)).fetchone()
-    if r and r["key_hash"]!=kh: abort(403)
-    if r:c.execute("update buddies set profile_json=?,updated_at=? where buddy_id=?",(enc,t,bid))
-    else:
-        c.execute("insert into buddies values(?,?,?,?,?)",(bid,kh,enc,t,t));c.execute("insert into activity(buddy_id,event_type,message,created_at) values(?,?,?,?)",(bid,"registered","Buddy joined Buddy World",t))
-    c.commit();return jsonify(ok=True,profile_url=f"{base()}/b/{bid}",server_time=t)
-@app.get("/api/v1/buddy/<bid>/qr.txt")
+ b=norm(bid);key=request.headers.get('X-Buddy-Key','')
+ if not 24<=len(key)<=96:abort(401)
+ raw=request.get_json(silent=True)
+ if not isinstance(raw,dict):abort(400)
+ raw['id']=b;raw['site_only']=False;raw['firmware']=str(raw.get('firmware','V24.3'))[:16];kh=hashlib.sha256(key.encode()).hexdigest();t=now();c=con();r=c.execute('select * from buddies where buddy_id=?',(b,)).fetchone()
+ if r and not str(r['key_hash']).startswith('SITE:') and r['key_hash']!=kh:c.close();abort(403)
+ enc=json.dumps(raw,separators=(',',':'))
+ if r:c.execute('update buddies set key_hash=?,profile_json=?,updated_at=? where buddy_id=?',(kh,enc,t,b))
+ else:c.execute('insert into buddies values(?,?,?,?,?)',(b,kh,enc,t,t))
+ c.commit();c.close();return jsonify(ok=True,profile_url=f'{base()}/b/{b}',server_time=t)
+@app.get('/api/v1/buddy/<bid>/qr.txt')
 def qr(bid):
-    bid=norm(bid);q=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=1,border=0);q.add_data(f"{base()}/b/{bid}");q.make(fit=True);m=q.get_matrix();n=len(m);pack=bytearray();v=0;k=0
-    for row in m:
-        for z in row:
-            v=(v<<1)|(1 if z else 0);k+=1
-            if k==8:pack.append(v);v=0;k=0
-    if k:pack.append(v<<(8-k))
-    return Response(f"{n}\n{pack.hex().upper()}\n",mimetype="text/plain")
-
+ b=norm(bid);q=qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=1,border=0);q.add_data(f'{base()}/b/{b}');q.make(fit=True);m=q.get_matrix();n=len(m);pack=bytearray();v=k=0
+ for row in m:
+  for z in row:
+   v=(v<<1)|(1 if z else 0);k+=1
+   if k==8:pack.append(v);v=k=0
+ if k:pack.append(v<<(8-k))
+ return Response(f'{n}\n{pack.hex().upper()}\n',mimetype='text/plain')
 con().close()
-if __name__=="__main__": app.run(host="0.0.0.0",port=int(os.environ.get("PORT","8080")))
+if __name__=='__main__':app.run(host='0.0.0.0',port=int(os.environ.get('PORT','8080')))
