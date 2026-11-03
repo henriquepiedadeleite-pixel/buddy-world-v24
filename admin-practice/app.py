@@ -110,3 +110,31 @@ def health():
         return {"upstream_status":r.status_code,"upstream_type":r.headers.get("content-type","")}, (200 if r.status_code==200 else 503)
     except requests.RequestException as e:
         return {"error":type(e).__name__},503
+
+
+@app.route("/__audit")
+def audit():
+    import json
+    from urllib.parse import urljoin
+    try:
+        home=S.get(UPSTREAM+"/arena",timeout=14)
+        links=re.findall(r"<script[^>]+src=[\"']([^\"']+)",home.text)
+        names=re.findall(r"<link[^>]+href=[\"']([^\"']+)",home.text)
+        reports={"page":home.status_code,"size":len(home.content),"scripts":[],"styles":[]}
+        for src in links[:12]:
+            uri=urljoin(home.url,src)
+            res=S.get(uri,timeout=12)
+            k={"src":src,"status":res.status_code,"type":res.headers.get("content-type",""),"bytes":len(res.content)}
+            if "game.js" in src and res.status_code==200:
+                k["patch_anchor"]=("if(!getProfile()){" in res.text)
+                k["modules"]=re.findall(r"from ['\"]([^'\"]+)",res.text)[:20]
+            reports["scripts"].append(k)
+        for href in names[:6]:
+            uri=urljoin(home.url,href)
+            res=S.get(uri,timeout=12)
+            reports["styles"].append({"href":href,"status":res.status_code,"bytes":len(res.content)})
+        print("RIFT_AUDIT "+json.dumps(reports),flush=True)
+        return reports
+    except Exception as e:
+        print("RIFT_AUDIT_ERROR "+repr(e),flush=True)
+        return {"error":str(e)},503
