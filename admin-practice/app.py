@@ -126,6 +126,21 @@ canvas.addEventListener('mousedown',e=>{
 },true);
 window.addEventListener('keydown',e=>{if(e.code==='KeyP'&&mode==='solo'&&active&&roundStarted&&weapon?.id===GATEKEEPER.id){e.preventDefault();qaPlacePortal();}},true);
 """
+
+# Lightweight diagnostics: do not log passwords, credentials or account requests.
+def qa_probe():
+    for filename in ("menu.js","net.js","game.js"):
+        try:
+            res=S.get(UPSTREAM+"/"+filename, timeout=8)
+            print("QA_SOURCE",filename,"status",res.status_code,"mime",res.headers.get("Content-Type"),"bytes",len(res.content),flush=True)
+            if filename in ("menu.js","net.js") and res.status_code==200:
+                for i,line in enumerate(res.text.splitlines()):
+                    if any(key in line for key in ("await api(", "api('", 'api("', "getProfile(", "refreshProfile(", "initialize", "window.addEventListener('load'")):
+                        print("QA_SOURCE_LINE",filename,i+1,line[:440],flush=True)
+        except Exception as e:
+            print("QA_SOURCE_FAILED",filename,type(e).__name__,flush=True)
+qa_probe()
+
 def modify_js(src):
     # Do not ever grant online inventory or server privileges.
     old_import="import {WEAPONS,SKINS,weaponById,skinById,normalizeWeapon} from './catalog.js';"
