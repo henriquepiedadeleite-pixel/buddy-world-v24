@@ -183,7 +183,14 @@ def modify_js(src):
         stable=("function humanoid(color,skinId='s00'){"
                 "return qaBuildAvatar(color,skinId);}\n")
         src=src[:start]+stable+src[stop:]
-    src+="\n"+ADMIN_BOOT.split("// Gatekeeper portal pair:")[0]+"\n"+(Path(__file__).parent/"qa_upgrade.js").read_text(encoding="utf-8")+"\n"+(Path(__file__).parent/"qa_visuals.js").read_text(encoding="utf-8")
+    # Initialize QA state BEFORE the original module calls loadArena() and frame().
+    # Otherwise let/const variables from the added graphics are in the temporal dead zone.
+    additions=("\n"+ADMIN_BOOT.split("// Gatekeeper portal pair:")[0]+"\n"+
+               (Path(__file__).parent/"qa_upgrade.js").read_text(encoding="utf-8")+"\n"+
+               (Path(__file__).parent/"qa_visuals.js").read_text(encoding="utf-8")+"\n")
+    init_marker="loadArena($('mapSelect').value||'fracture');frame();"
+    if init_marker in src:
+        src=src.replace(init_marker,additions+init_marker,1)
     return src
 
 # Public-domain (CC0) scenic model cache: curated fixed filenames only, no arbitrary remote proxy.
