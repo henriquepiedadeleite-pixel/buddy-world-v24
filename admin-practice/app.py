@@ -1,4 +1,5 @@
 import os, re, requests
+from pathlib import Path
 from flask import Flask, Response, redirect, request
 
 app = Flask(__name__)
@@ -133,13 +134,16 @@ def modify_js(src):
     src=src.replace(old_import,"import {WEAPONS,SKINS,weaponById as originalWeaponById,skinById,normalizeWeapon as originalNormalizeWeapon} from './catalog.js';",1)
     gatekeeper_boot=("const GATEKEEPER={...(WEAPONS.find(w=>w.type==='sniper')||WEAPONS[0]),"
                      "id:'rift-gatekeeper',name:'Gatekeeper · Portal Sniper',type:'sniper',"
-                     "rarity:'legendary',damage:9999,mag:5,reload:2.4,cooldown:1.1,"
+                     "rarity:'legendary',damage:9999,mag:10,reload:2.4,cooldown:.82,"
                      "inaccuracy:0,speed:220,color:'#9b80ff'};"
                      "const weaponById=id=>id===GATEKEEPER.id?GATEKEEPER:originalWeaponById(id);"
                      "const normalizeWeapon=w=>w?.id===GATEKEEPER.id?GATEKEEPER:originalNormalizeWeapon(w);\n")
     src=src.replace("const $=id=>document.getElementById(id)",gatekeeper_boot+"const $=id=>document.getElementById(id)",1)
-    src=src.replace("physics(dt);if(spawnShield>0)","physics(dt);qaPortalFrame();if(spawnShield>0)",1)
+    src=src.replace("physics(dt);if(spawnShield>0)","qaPlayerIncoming.copy(vel);physics(dt);qaPortalFrame();if(spawnShield>0)",1)
     src=src.replace("function clearWorldActors(){","function clearWorldActors(){qaClearPortals();",1)
+    src=src.replace("botMove(b,dt);b.rope.visible","b._qaIncomingVelocity=b.v.clone();botMove(b,dt);qaPortalBotFrame(b);b.rope.visible",1)
+    src=src.replace("b.travelled+=len;ray.set(old,step.clone().normalize());","b.travelled+=len;if(qaBulletPortal(b,old,step))continue;ray.set(old,step.clone().normalize());",1)
+    src=src.replace("renderer.autoClear=true;renderer.render(scene,camera);","qaRenderPortals();renderer.autoClear=true;renderer.render(scene,camera);",1)
     src=src.replace("aiming?(weapon.type==='sniper'?27:57)","aiming?(weapon.id===GATEKEEPER.id?11:weapon.type==='sniper'?27:57)",1)
     src=src.replace("for(let side of [-1,1]){for(let i=0;i<3;i++)orb(g,", "if(w.id===GATEKEEPER.id){const violet=m('#a084ff',.22,.18,'#5d26e8');for(let i=0;i<5;i++){orb(g,.045,0,.19,-.5+i*.14,violet);}box(g,.3,.04,.65,0,.09,-.36,violet);for(const side of [-1,1]){orb(g,.1,side*.14,.04,-.17,violet);}}for(let side of [-1,1]){for(let i=0;i<3;i++)orb(g,",1)
     point="if(!getProfile()){$('networkStatus').textContent='Wait for your inventory or refresh the balance.';return;}selectedLoadout=[...getProfile().loadout];selectedSkin=getProfile().skin;"
@@ -147,7 +151,15 @@ def modify_js(src):
     src=src.replace(point,replacement,1)
     src=src.replace("const info=await api(mode==='solo'?'solo':'start',{room});if(mode==='solo')matchId=info.match;beginRound();","if(mode==='solo'){matchId=null;beginRound();return;}const info=await api('start',{room});beginRound();",1)
     src=src.replace("showResults(finalResults);try{const r=await api('reward'","showResults(finalResults);if(mode==='solo')return;try{const r=await api('reward'",1)
-    src+="\n"+ADMIN_BOOT
+    # Character limbs were merged in the original client, sometimes breaking transforms.
+    start=src.find("function humanoid(color,skinId='s00'){")
+    stop=src.find("function enemyMarker(", start)
+    if start>=0 and stop>start:
+        stable=("function humanoid(color,skinId='s00'){"
+                "const g=buildRetroRunner(THREE,{color,skin:skinById(skinId),material:m});"
+                "return outline(g);}\n")
+        src=src[:start]+stable+src[stop:]
+    src+="\n"+ADMIN_BOOT+"\n"+(Path(__file__).parent/"qa_upgrade.js").read_text(encoding="utf-8")
     return src
 @app.route("/")
 def root():
