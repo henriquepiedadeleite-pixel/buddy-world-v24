@@ -234,7 +234,19 @@ def mirror(path):
             data=modify_js(script).encode("utf-8")
     if resp.status_code==200 and "text/html" in content_type:
         text=resp.text
-        text=text.replace("</head>","<style>#qa-notice{position:fixed;bottom:4px;left:8px;z-index:99;padding:5px 8px;background:#15222ee8;color:white;font:11px Arial;border-radius:5px;pointer-events:none}</style></head>",1)
+        # Visible QA-only boot diagnostics instead of a silent frozen title screen.
+        error_js=("<script>(function(){"
+                  "function show(message){if(!document.body)return;"
+                  "var e=document.getElementById('qa-crash');"
+                  "if(!e){e=document.createElement('div');e.id='qa-crash';"
+                  "e.style.cssText='position:fixed;top:12px;left:12px;right:12px;z-index:999999;padding:15px;border:2px solid #ff8888;background:#251c29ef;color:#fff;font:14px/1.45 Arial;border-radius:12px;white-space:pre-wrap';"
+                  "document.body.appendChild(e);}e.textContent='RIFT / FORGE · ERRO NO CARREGAMENTO\\n'+String(message).slice(0,270);}"
+                  "window.addEventListener('error',function(e){show(e.message||'Falha do JavaScript');});"
+                  "window.addEventListener('unhandledrejection',function(e){show(e.reason?.message||e.reason||'Falha do jogo');});"
+                  "setTimeout(function(){var l=document.getElementById('loading');"
+                  "if(l&&!l.classList.contains('hidden'))show('O jogo não terminou de iniciar. Envia uma captura desta mensagem.');},18000);"
+                  "})();</script>")
+        text=text.replace("</head>",error_js+"<style>#qa-notice{position:fixed;bottom:4px;left:8px;z-index:99;padding:5px 8px;background:#15222ee8;color:white;font:11px Arial;border-radius:5px;pointer-events:none}</style></head>",1)
         text=text.replace("</body>",'<div id="qa-notice">Modo Admin de Testes · apenas Practice · não é o servidor original</div></body>',1)
         data=text.encode("utf-8")
     headers={"Content-Type":content_type.split(";")[0]+"; charset=utf-8" if any(x in content_type for x in ("text/","javascript","json")) else content_type,
