@@ -1,5 +1,7 @@
 
 // RIFT/FORGE QA portal upgrade -- Practice ONLY.
+const qaPortals=[null,null];
+let qaPortalNext=0,qaPortalCooldown=0,qaLastPosition=null;
 // All grants are local browser preferences; competitive/server inventory remains untouched.
 const QA_PORTAL_RADIUS = 1.38;
 const QA_RENDER_SIZE = 384;
