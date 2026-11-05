@@ -130,12 +130,13 @@ def modify_js(src):
     old_import="import {WEAPONS,SKINS,weaponById,skinById,normalizeWeapon} from './catalog.js';"
     if old_import not in src:
         return src
-    src=src.replace(old_import,"import {WEAPONS,SKINS,weaponById as originalWeaponById,skinById,normalizeWeapon} from './catalog.js';",1)
+    src=src.replace(old_import,"import {WEAPONS,SKINS,weaponById as originalWeaponById,skinById,normalizeWeapon as originalNormalizeWeapon} from './catalog.js';",1)
     gatekeeper_boot=("const GATEKEEPER={...(WEAPONS.find(w=>w.type==='sniper')||WEAPONS[0]),"
                      "id:'rift-gatekeeper',name:'Gatekeeper · Portal Sniper',type:'sniper',"
                      "rarity:'legendary',damage:9999,mag:5,reload:2.4,cooldown:1.1,"
                      "inaccuracy:0,speed:220,color:'#9b80ff'};"
-                     "const weaponById=id=>id===GATEKEEPER.id?GATEKEEPER:originalWeaponById(id);\\n")
+                     "const weaponById=id=>id===GATEKEEPER.id?GATEKEEPER:originalWeaponById(id);"
+                     "const normalizeWeapon=w=>w?.id===GATEKEEPER.id?GATEKEEPER:originalNormalizeWeapon(w);\n")
     src=src.replace("const $=id=>document.getElementById(id)",gatekeeper_boot+"const $=id=>document.getElementById(id)",1)
     src=src.replace("physics(dt);if(spawnShield>0)","physics(dt);qaPortalFrame();if(spawnShield>0)",1)
     src=src.replace("function clearWorldActors(){","function clearWorldActors(){qaClearPortals();",1)
