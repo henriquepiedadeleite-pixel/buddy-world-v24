@@ -8,9 +8,9 @@ S.headers.update({"User-Agent":"RIFT-FORGE-QA-Practice/1.0","Accept-Encoding":"i
 ADMIN_BOOT = r"""
 // RIFT / FORGE ADMIN PRACTICE (offline QA only, never grants server permissions)
 const ADMIN_PRACTICE=true;
-const qaCatalog=[...WEAPONS];
+const qaCatalog=[...WEAPONS,GATEKEEPER];
 const qaSkins=[...SKINS];
-const qaSelected=[qaCatalog[0]?.id,qaCatalog[1]?.id,qaCatalog[2]?.id];
+const qaSelected=[GATEKEEPER.id,qaCatalog[1]?.id,qaCatalog[2]?.id];
 let qaSkin=qaSkins[0]?.id;
 let qaSlot=0;
 function qaInterface(){
@@ -67,9 +67,80 @@ function qaInterface(){
   list();
 }
 setTimeout(qaInterface,0);
+
+// Gatekeeper portal pair: Practice-only, no network or account privileges.
+const qaPortals=[null,null];
+let qaPortalNext=0,qaPortalCooldown=0,qaLastPosition=null;
+function qaClearPortals(){
+  for(const p of qaPortals){if(p){scene.remove(p.group);p.group.traverse(o=>{o.geometry?.dispose();if(o.material)o.material.dispose();});}}
+  qaPortals[0]=null;qaPortals[1]=null;qaPortalCooldown=0;qaLastPosition=null;qaPortalNext=0;
+}
+function qaPlacePortal(){
+  if(mode!=='solo'||!active||!roundStarted||weapon?.id!==GATEKEEPER.id||!locked)return;
+  const dir=camera.getWorldDirection(new V());
+  ray.set(camera.position,dir);ray.far=150;
+  const hit=ray.intersectObjects(solidMeshes,true)[0];
+  if(!hit){toast('NO WALL OR FLOOR IN RANGE',1.2);return;}
+  const n=hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+  const p=hit.point.clone();
+  const i=qaPortalNext;qaPortalNext=1-i;
+  if(qaPortals[i]){scene.remove(qaPortals[i].group);qaPortals[i].group.traverse(o=>{o.geometry?.dispose();if(o.material)o.material.dispose();});}
+  const g=new THREE.Group();
+  const color=i===0?'#37baff':'#ffab41';
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.78,.09,12,48),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.98,side:THREE.DoubleSide}));
+  const veil=new THREE.Mesh(new THREE.CircleGeometry(.73,48),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.27,side:THREE.DoubleSide,depthWrite:false}));
+  g.add(ring,veil);g.position.copy(p).addScaledVector(n,.11);
+  g.quaternion.setFromUnitVectors(new V(0,0,1),n);
+  scene.add(g);qaPortals[i]={point:p,normal:n,group:g};
+  toast('PORTAL '+(i===0?'BLUE':'ORANGE')+' PLACED · '+(qaPortals[0]&&qaPortals[1]?'PAIR READY':'PLACE NEXT PORTAL'),2);
+}
+function qaPortalFrame(){
+  if(mode!=='solo'||!active||!roundStarted)return;
+  const center=pos.clone().add(new V(0,slide?.55:.95,0));
+  if(!qaLastPosition){qaLastPosition=center;return;}
+  if(!qaPortals[0]||!qaPortals[1]||time<qaPortalCooldown){qaLastPosition=center;return;}
+  for(let i=0;i<2;i++){
+    const a=qaPortals[i],b=qaPortals[1-i];
+    const rel=center.clone().sub(a.point),old=qaLastPosition.clone().sub(a.point);
+    const signed=rel.dot(a.normal),before=old.dot(a.normal);
+    const sideways=rel.addScaledVector(a.normal,-signed).length();
+    if(signed>-.3&&signed<1.05&&sideways<.74&&(before>signed+.005||vel.dot(a.normal)<-1)){
+      const q=new THREE.Quaternion().setFromUnitVectors(a.normal.clone().negate(),b.normal);
+      const facing=camera.getWorldDirection(new V()).applyQuaternion(q);
+      vel.applyQuaternion(q);
+      pos.copy(b.point).addScaledVector(b.normal,1.45).add(new V(0,-.9,0));
+      yaw=Math.atan2(-facing.x,-facing.z);
+      pitch=clamp(Math.asin(clamp(facing.y,-1,1)),-1.48,1.48);
+      qaPortalCooldown=time+1.2;qaLastPosition=null;
+      toast('PORTAL TRANSIT · MOMENTUM KEPT',1.2);burst(pos.clone().add(new V(0,1,0)),'#b991ff',24,9);
+      return;
+    }
+  }
+  qaLastPosition=center;
+}
+canvas.addEventListener('mousedown',e=>{
+  if(e.button!==2||mode!=='solo'||!active||!roundStarted||weapon?.id!==GATEKEEPER.id)return;
+  if(controlMode==='drag'&&!touchpad)return; // right drag is needed for camera in touchpad mode.
+  e.preventDefault();e.stopImmediatePropagation();qaPlacePortal();
+},true);
+window.addEventListener('keydown',e=>{if(e.code==='KeyP'&&mode==='solo'&&active&&roundStarted&&weapon?.id===GATEKEEPER.id){e.preventDefault();qaPlacePortal();}},true);
 """
 def modify_js(src):
     # Do not ever grant online inventory or server privileges.
+    old_import="import {WEAPONS,SKINS,weaponById,skinById,normalizeWeapon} from './catalog.js';"
+    if old_import not in src:
+        return src
+    src=src.replace(old_import,"import {WEAPONS,SKINS,weaponById as originalWeaponById,skinById,normalizeWeapon} from './catalog.js';",1)
+    gatekeeper_boot=("const GATEKEEPER={...(WEAPONS.find(w=>w.type==='sniper')||WEAPONS[0]),"
+                     "id:'rift-gatekeeper',name:'Gatekeeper · Portal Sniper',type:'sniper',"
+                     "rarity:'legendary',damage:9999,mag:5,reload:2.4,cooldown:1.1,"
+                     "inaccuracy:0,speed:220,color:'#9b80ff'};"
+                     "const weaponById=id=>id===GATEKEEPER.id?GATEKEEPER:originalWeaponById(id);\\n")
+    src=src.replace("const $=id=>document.getElementById(id)",gatekeeper_boot+"const $=id=>document.getElementById(id)",1)
+    src=src.replace("physics(dt);if(spawnShield>0)","physics(dt);qaPortalFrame();if(spawnShield>0)",1)
+    src=src.replace("function clearWorldActors(){","function clearWorldActors(){qaClearPortals();",1)
+    src=src.replace("aiming?(weapon.type==='sniper'?27:57)","aiming?(weapon.id===GATEKEEPER.id?11:weapon.type==='sniper'?27:57)",1)
+    src=src.replace("for(let side of [-1,1]){for(let i=0;i<3;i++)orb(g,", "if(w.id===GATEKEEPER.id){const violet=m('#a084ff',.22,.18,'#5d26e8');for(let i=0;i<5;i++){orb(g,.045,0,.19,-.5+i*.14,violet);}box(g,.3,.04,.65,0,.09,-.36,violet);for(const side of [-1,1]){orb(g,.1,side*.14,.04,-.17,violet);}}for(let side of [-1,1]){for(let i=0;i<3;i++)orb(g,",1)
     point="if(!getProfile()){$('networkStatus').textContent='Wait for your inventory or refresh the balance.';return;}selectedLoadout=[...getProfile().loadout];selectedSkin=getProfile().skin;"
     replacement="if($('mode').value!=='solo'&&!getProfile()){$('networkStatus').textContent='Wait for your inventory or refresh the balance.';return;}selectedLoadout=$('mode').value==='solo'?[...qaSelected]:[...getProfile().loadout];selectedSkin=$('mode').value==='solo'?qaSkin:getProfile().skin;"
     src=src.replace(point,replacement,1)
