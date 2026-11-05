@@ -159,6 +159,16 @@ def modify_js(src):
     src=src.replace("botMove(b,dt);b.rope.visible","b._qaIncomingVelocity=b.v.clone();botMove(b,dt);qaPortalBotFrame(b);b.rope.visible",1)
     src=src.replace("b.travelled+=len;ray.set(old,step.clone().normalize());","b.travelled+=len;if(qaBulletPortal(b,old,step))continue;ray.set(old,step.clone().normalize());",1)
     src=src.replace("renderer.autoClear=true;renderer.render(scene,camera);","qaRenderPortals();renderer.autoClear=true;renderer.render(scene,camera);",1)
+    # Practice-only projectile help; leave server-authoritative multiplayer unchanged.
+    src=src.replace("b.travelled<35||b.assistLeft<=0","b.travelled<(mode==='solo'&&b.owner===localId?8:35)||b.assistLeft<=0",1)
+    src=src.replace("let best=null,angle=.05;for(const e of entities())","let best=null,angle=mode==='solo'&&b.owner===localId?.125:.05;for(const e of entities())",1)
+    src=src.replace("const turn=Math.min(b.assistLeft,dt*.16,angle)","const turn=Math.min(b.assistLeft,dt*(mode==='solo'&&b.owner===localId?.25:.16),angle)",1)
+    src=src.replace("assistLeft:.024","assistLeft:mode==='solo'&&owner===localId?.095:.024",1)
+    src=src.replace("const ep=e.p.clone().add(new V(0,clamp(closest.y-e.p.y,.35,1.7),0));if(closest.distanceTo(ep)<.42&&along<hitD)",
+        "const qaEasy=mode==='solo'&&b.owner===localId;const ep=e.p.clone().add(new V(0,clamp(closest.y-e.p.y,qaEasy?.16:.35,qaEasy?2.1:1.7),0));if(closest.distanceTo(ep)<(qaEasy?.76:.42)&&along<hitD)",1)
+    # All new environment art is visual-only and has no collision meshes.
+    src=src.replace("batchEnvironment();rebuildNavigation();","batchEnvironment();qaDecorateArena(id);rebuildNavigation();",1)
+    src=src.replace("mapWorld.traverse(o=>{o.geometry?.dispose();","qaDisposeScenery();mapWorld.traverse(o=>{o.geometry?.dispose();",1)
     src=src.replace("aiming?(weapon.type==='sniper'?27:57)","aiming?(weapon.id===GATEKEEPER.id?11:weapon.type==='sniper'?27:57)",1)
     src=src.replace("for(let side of [-1,1]){for(let i=0;i<3;i++)orb(g,", "if(w.id===GATEKEEPER.id){const violet=m('#a084ff',.22,.18,'#5d26e8');for(let i=0;i<5;i++){orb(g,.045,0,.19,-.5+i*.14,violet);}box(g,.3,.04,.65,0,.09,-.36,violet);for(const side of [-1,1]){orb(g,.1,side*.14,.04,-.17,violet);}}for(let side of [-1,1]){for(let i=0;i<3;i++)orb(g,",1)
     point="if(!getProfile()){$('networkStatus').textContent='Wait for your inventory or refresh the balance.';return;}selectedLoadout=[...getProfile().loadout];selectedSkin=getProfile().skin;"
@@ -171,11 +181,32 @@ def modify_js(src):
     stop=src.find("function enemyMarker(", start)
     if start>=0 and stop>start:
         stable=("function humanoid(color,skinId='s00'){"
-                "const g=buildRetroRunner(THREE,{color,skin:skinById(skinId),material:m});"
-                "return outline(g);}\n")
+                "return qaBuildAvatar(color,skinId);}\n")
         src=src[:start]+stable+src[stop:]
-    src+="\n"+ADMIN_BOOT.split("// Gatekeeper portal pair:")[0]+"\n"+(Path(__file__).parent/"qa_upgrade.js").read_text(encoding="utf-8")
+    src+="\n"+ADMIN_BOOT.split("// Gatekeeper portal pair:")[0]+"\n"+(Path(__file__).parent/"qa_upgrade.js").read_text(encoding="utf-8")+"\n"+(Path(__file__).parent/"qa_visuals.js").read_text(encoding="utf-8")
     return src
+
+# Public-domain (CC0) scenic model cache: curated fixed filenames only, no arbitrary remote proxy.
+QA_CC0_MODELS={
+  "city-industrial":{"building-c.glb","building-m.glb"},
+  "space-station":{"container-tall.glb","container-wide.glb","structure.glb"},
+  "space":{"structure_detailed.glb","satelliteDish_detailed.glb","rock_crystalsLargeA.glb","machine_generatorLarge.glb"},
+  "nature":{"rock_largeA.glb","plant_bushDetailed.glb","rock_tallA.glb"}
+}
+@app.route("/qa-model/<kit>/<filename>",methods=["GET"])
+def qa_model(kit,filename):
+    if filename not in QA_CC0_MODELS.get(kit,set()):
+        return Response("Model not available",status=404)
+    url="https://raw.githubusercontent.com/shorepine/kenney/main/3d/"+kit+"/"+filename
+    try:
+        result=S.get(url,timeout=14)
+        if result.status_code!=200 or len(result.content)>2_000_000 or len(result.content)<100:
+            return Response("Optional model unavailable",status=502)
+        return Response(result.content,content_type="model/gltf-binary",
+                        headers={"Cache-Control":"public,max-age=86400","X-Content-Type-Options":"nosniff"})
+    except requests.RequestException:
+        return Response("Optional model unavailable",status=502)
+
 @app.route("/")
 def root():
     return redirect("/arena", code=302)
