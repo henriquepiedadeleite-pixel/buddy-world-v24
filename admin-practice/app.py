@@ -174,7 +174,7 @@ def modify_js(src):
                 "const g=buildRetroRunner(THREE,{color,skin:skinById(skinId),material:m});"
                 "return outline(g);}\n")
         src=src[:start]+stable+src[stop:]
-    src+="\n"+ADMIN_BOOT+"\n"+(Path(__file__).parent/"qa_upgrade.js").read_text(encoding="utf-8")
+    src+="\n"+ADMIN_BOOT.split("// Gatekeeper portal pair:")[0]+"\n"+(Path(__file__).parent/"qa_upgrade.js").read_text(encoding="utf-8")
     return src
 @app.route("/")
 def root():
